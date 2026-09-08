@@ -40,13 +40,13 @@ Each layer only depends inward: UI features call an application state holder; th
 
 The pairing screen accepts either a pasted `uos-ai://pair?...` link or a QR scan. CameraX supplies frames to a bundled ZXing decoder, which avoids a dependency on Google Play services.
 
-`PairingUri` accepts the existing v1 schema exactly: `v=1`, `host`, `port`, `pairingSecret`, `expiresAtMs`, and `hostDisplayName`. It rejects malformed or duplicate fields, missing or expired secrets, public hosts, and hosts outside an approved tailnet address range or `*.ts.net` hostname. The WebSocket endpoint is constructed as `wss://<host>:<port>`. The app posts the existing `pair` frame, receives `pairing_granted`, and saves only the returned `deviceId` and token in Android Keystore-protected encrypted storage. The one-time secret is discarded immediately.
+`PairingUri` accepts the existing v1 schema exactly: `v=1`, `host`, `port`, `pairingSecret`, `expiresAtMs`, and `hostDisplayName`. It rejects malformed or duplicate fields, missing or expired secrets, public hosts, and any host that is not an ASCII `*.ts.net` hostname. The WebSocket endpoint is constructed as `wss://<host>:<port>`. A hostname is required because the Tailscale certificate must match it; the listener itself remains bound to the host's local Tailscale IP. The app posts the existing `pair` frame, receives `pairing_granted`, and saves only the returned `deviceId` and token in Android Keystore-protected encrypted storage. The one-time secret is discarded immediately.
 
 The client sends `authenticate` on every subsequent socket connection. Authentication failures clear the grant and return the user to pairing. A device name is derived locally from the Android model and has no account identity attached to it.
 
 ## Transport security
 
-The companion connection uses `wss://` to a Tailscale-bound UOS AI listener. The Android app does not enable a global cleartext exception. The host verifies that its bound peer is tailnet-local as it does today; the client verifies that a pairing endpoint is a tailnet IP or tailnet hostname before connecting.
+The companion connection uses `wss://` to a Tailscale-bound UOS AI listener. The Android app does not enable a global cleartext exception. The host verifies that its bound peer is tailnet-local as it does today; the client verifies that a pairing endpoint is a `*.ts.net` tailnet hostname before connecting.
 
 The UOS host exposes the secure listener only after it has a locally configured certificate and private key for its tailnet hostname. If that configuration is missing, the desktop settings page reports that no secure invitation can be created. It must not silently publish `ws://`, bind a public interface, or fall back to a public relay. The existing iOS URL builder is migrated from `ws://` to the same `wss://` endpoint so a secure-host upgrade does not strand iOS clients.
 

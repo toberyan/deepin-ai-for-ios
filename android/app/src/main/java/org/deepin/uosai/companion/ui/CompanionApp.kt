@@ -50,7 +50,10 @@ import org.deepin.uosai.companion.app.CompanionWorkspace
 import org.deepin.uosai.companion.app.TranscriptEntry
 import org.deepin.uosai.companion.app.TranscriptRole
 import org.deepin.uosai.companion.core.network.ConnectionState
+import org.deepin.uosai.companion.feature.pairing.PairingEntryMode
 import org.deepin.uosai.companion.feature.pairing.QrScannerDialog
+import org.deepin.uosai.companion.feature.pairing.showManualEntry
+import org.deepin.uosai.companion.feature.pairing.showScanner
 
 private val wideLayoutBreakpoint = 840.dp
 
@@ -145,6 +148,7 @@ private fun PairingScreen(
 ) {
     var invitation by rememberSaveable { mutableStateOf("") }
     var showScanner by rememberSaveable { mutableStateOf(false) }
+    var entryMode by remember { mutableStateOf(PairingEntryMode.initial()) }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Card(Modifier.widthIn(max = 620.dp).padding(24.dp)) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -153,19 +157,35 @@ private fun PairingScreen(
                     "Scan the one-time QR code from UOS AI desktop. This companion only accepts secure Tailscale .ts.net invitations.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                OutlinedTextField(
-                    value = invitation,
-                    onValueChange = { invitation = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Pairing invitation") },
-                    minLines = 3,
-                    maxLines = 5,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { onPair(invitation) }, enabled = invitation.isNotBlank()) { Text("Pair") }
-                    OutlinedButton(onClick = { showScanner = true }) { Text("Scan QR") }
-                    Text(connectionLabel(connection), modifier = Modifier.align(Alignment.CenterVertically))
+                if (entryMode == PairingEntryMode.Scanner) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("Scan desktop QR", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text("On UOS AI desktop, open Mobile Companion and choose Show pairing QR.")
+                            Button(onClick = { showScanner = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan UOS AI QR") }
+                            TextButton(onClick = { entryMode = entryMode.showManualEntry() }, modifier = Modifier.align(Alignment.End)) {
+                                Text("Paste invitation instead")
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = invitation,
+                        onValueChange = { invitation = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Pairing invitation") },
+                        minLines = 3,
+                        maxLines = 5,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { onPair(invitation) }, enabled = invitation.isNotBlank()) { Text("Pair") }
+                        OutlinedButton(onClick = { entryMode = entryMode.showScanner() }) { Text("Use QR scanner") }
+                    }
                 }
+                Text(connectionLabel(connection), style = MaterialTheme.typography.bodySmall)
                 error?.let { ErrorBanner(it, onDismissError) }
             }
         }

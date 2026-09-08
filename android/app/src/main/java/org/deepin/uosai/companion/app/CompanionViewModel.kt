@@ -60,7 +60,6 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             socket.frames().collectLatest(::handleIncomingFrame)
         }
-        reconnect()
     }
 
     fun pair(rawInvitation: String) = viewModelScope.launch {

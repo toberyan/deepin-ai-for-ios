@@ -11,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import org.deepin.uosai.companion.app.LaunchConnectionPolicy
 import org.deepin.uosai.companion.app.CompanionViewModel
 import org.deepin.uosai.companion.ui.CompanionApp
 
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
             val state = model.state.collectAsStateWithLifecycle().value
             val pairingUri = incomingPairingUri
             LaunchedEffect(pairingUri) {
-                pairingUri?.let(model::pairFromDeepLink)
+                LaunchConnectionPolicy(model::reconnect, model::pairFromDeepLink).handle(pairingUri)
             }
             MaterialTheme {
                 Surface {

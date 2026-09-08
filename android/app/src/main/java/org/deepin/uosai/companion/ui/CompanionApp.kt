@@ -182,7 +182,7 @@ private fun PairingScreen(
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = { onPair(invitation) }, enabled = invitation.isNotBlank()) { Text("Pair") }
-                        OutlinedButton(onClick = { entryMode = entryMode.showScanner() }) { Text("Use QR scanner") }
+                        OutlinedButton(onClick = { entryMode = entryMode.showScanner() }) { Text("Scan QR instead") }
                     }
                 }
                 Text(connectionLabel(connection), style = MaterialTheme.typography.bodySmall)

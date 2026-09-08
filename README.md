@@ -13,7 +13,7 @@ The host implementation is in the dedicated worktree at `/home/toberyan/orca/wor
 
 The production transport is `wss://<tailnet-hostname>:45980`; neither client accepts a public address or silently falls back to cleartext `ws://`. Agent approvals always require a tap. The apps expose only **Reject** and **Allow once**; they never send an `always_approve` grant.
 
-**Advanced connection settings** are a manual recovery path for a custom address, port, or existing certificate. QR creation remains unavailable until a workspace is selected and the secure WSS listener is ready.
+**Advanced connection settings** are a manual recovery path for a custom address, port, or existing certificate. QR creation remains unavailable until a workspace is selected, its access is saved, and the secure WSS listener is ready. Clearing the final selected workspace presents **Stop sharing**, which closes the listener and prevents new invitations. To change an active listener's address, port, hostname, or certificate, first disable it so existing paired devices are not disconnected unexpectedly.
 
 ## Build
 

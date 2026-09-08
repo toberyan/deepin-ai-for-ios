@@ -21,7 +21,7 @@
 
 The exact QR payload is the copyable `uos-ai://pair?...` URI. Android also registers that scheme as a system deep link, so scanning it with the system camera can hand it directly to the companion. A malformed, public-host, or expired invitation is rejected before any connection attempt.
 
-Use **Advanced connection settings** only as the manual recovery path for a custom Tailnet address, port, hostname, or existing PEM files. The key remains stored under UOS AI application data. Production has no `ws://` fallback.
+Use **Advanced connection settings** only as the manual recovery path for a custom Tailnet address, port, hostname, or existing PEM files. Save any changed workspace selection before showing a QR. Clearing the final workspace exposes **Stop sharing**, which disables the listener and prevents new invitations. To change an active listener's connection settings, disable it first; this keeps existing paired-device connections from being dropped by a failed reconfiguration. The key remains stored under UOS AI application data. Production has no `ws://` fallback.
 
 ## Recovery and backup
 

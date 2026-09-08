@@ -13,13 +13,15 @@
 ## Enablement
 
 1. Install and sign in to Tailscale on the UOS host and mobile device with the same tailnet.
-2. In UOS AI select **iOS Companion** from the title-bar menu; its settings page is named **Mobile Companion**.
-3. Select a displayed Tailscale address, the host's ASCII `*.ts.net` tailnet hostname, and paths to its matching PEM TLS certificate and private key. Select one or more existing workspaces. Do not share workspaces that contain conversations you do not intend to expose to the selected device.
-4. Save the settings and enable the listener. It listens securely on the selected local Tailscale address; the default port is `45980`.
-5. Create an invitation, then scan the rendered QR code or open/paste the invitation in the iOS or Android app. The desktop page intentionally returns the secret once. Do not put it in chat logs, issue trackers, or a shared clipboard.
+2. In UOS AI select **Mobile Companion** from the title-bar menu. Select one or more existing workspaces. Do not share workspaces that contain conversations you do not intend to expose to the selected device.
+3. Press **Prepare secure pairing**. Only this user-initiated action reads local Tailscale state and asks Tailscale to create a matching TLS certificate and private key under UOS AI application data. No command output or key data is shown in the UI.
+4. When Secure host shows **Ready**, press **Show pairing QR**. On Android choose **Scan UOS AI QR**. Use **Paste invitation instead** only if camera scanning is unavailable.
+5. The QR is an invitation valid for five minutes. The desktop page intentionally returns its secret once. Do not put it in chat logs, issue trackers, or a shared clipboard. QR creation requires both a selected workspace and a ready WSS listener.
 6. Verify the connected device label, then revoke it immediately if the phone is lost or replaced.
 
 The exact QR payload is the copyable `uos-ai://pair?...` URI. Android also registers that scheme as a system deep link, so scanning it with the system camera can hand it directly to the companion. A malformed, public-host, or expired invitation is rejected before any connection attempt.
+
+Use **Advanced connection settings** only as the manual recovery path for a custom Tailnet address, port, hostname, or existing PEM files. The key remains stored under UOS AI application data. Production has no `ws://` fallback.
 
 ## Recovery and backup
 

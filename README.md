@@ -7,11 +7,13 @@ The host implementation is in the dedicated worktree at `/home/toberyan/orca/wor
 ## Setup
 
 1. Sign in to Tailscale on the UOS computer and mobile device, using the same tailnet.
-2. In UOS AI, open the title-bar **iOS Companion** item (the page is headed **Mobile Companion**). Choose the computer's local Tailscale address, its ASCII `*.ts.net` MagicDNS hostname, and the matching TLS certificate and private-key files. Select only the workspaces to share, then enable the listener on port `45980`.
-3. Create a one-time invitation and scan its QR code or open/paste its `uos-ai://pair?...` value in either app. Invitations expire in five minutes and only return a device token once.
+2. In UOS AI, open **Mobile Companion** from the title-bar menu and select at least one workspace. Press **Prepare secure pairing**. This explicit action reads local Tailscale state and asks Tailscale to write the host TLS files under UOS AI application data.
+3. When Secure host shows **Ready**, press **Show pairing QR**. On Android, choose **Scan UOS AI QR**. Use **Paste invitation instead** only when camera scanning is unavailable. Invitations expire in five minutes and only return a device token once.
 4. Open an allowed workspace, select an existing conversation, and continue it. The app sends the original stable `conversationId`; it does not create a replacement conversation.
 
 The production transport is `wss://<tailnet-hostname>:45980`; neither client accepts a public address or silently falls back to cleartext `ws://`. Agent approvals always require a tap. The apps expose only **Reject** and **Allow once**; they never send an `always_approve` grant.
+
+**Advanced connection settings** are a manual recovery path for a custom address, port, or existing certificate. QR creation remains unavailable until a workspace is selected and the secure WSS listener is ready.
 
 ## Build
 

@@ -1,6 +1,6 @@
 # Remote companion protocol v1
 
-Frames are UTF-8 JSON over the UOS AI host's Tailscale-bound WebSocket. Protocol major version is `1`; unknown fields are ignored.
+Frames are UTF-8 JSON over the UOS AI host's Tailscale-bound, TLS-protected WebSocket (`wss://<tailnet-hostname>:<port>`). Protocol major version is `1`; unknown fields are ignored.
 
 ## Bootstrap
 
@@ -14,7 +14,7 @@ The first unauthenticated frame may be a one-time pairing exchange:
 }
 ```
 
-On success the host returns `pairing_granted` with a newly created `deviceId` and token. The client puts that token in Keychain and begins later connections with:
+On success the host returns `pairing_granted` with a newly created `deviceId` and token. The client stores that token only in platform-protected credential storage and begins later connections with:
 
 ```json
 { "kind": "authenticate", "deviceId": "ios-…", "token": "…" }

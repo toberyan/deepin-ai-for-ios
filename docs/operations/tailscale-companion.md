@@ -4,6 +4,7 @@
 
 - The UOS AI listener is disabled by default.
 - It binds only to an administrator-selected, locally present Tailscale IPv4 `100.64.0.0/10` or Tailscale IPv6 `fd7a:115c:a1e0::/48` address. It rejects wildcard, LAN, and public addresses.
+- Production connections are TLS-only: the listener needs an ASCII `*.ts.net` tailnet hostname and the matching readable PEM certificate and private key. Mobile clients build `wss://<hostname>:<port>` and retain normal certificate and hostname validation; they do not fall back to `ws://`.
 - Pairing invitations are memory-resident, single-use, and valid for five minutes. A device token is 32 random bytes, delivered once, and persisted on the host only as a versioned SHA-256 digest.
 - Each device grant has an explicit workspace allowlist. Private or temporary conversations are denied even if a client guesses an ID.
 - Revocation is checked on the next command and closes the connection. Command responses are idempotent for 24 hours per `{deviceId, requestId}`.
@@ -11,14 +12,14 @@
 
 ## Enablement
 
-1. Install and sign in to Tailscale on both devices.
-2. In UOS AI select **iOS Companion** from the title-bar menu.
-3. Select a displayed Tailscale address and one or more existing workspaces. Do not share workspaces that contain conversations you do not intend to expose to the selected device.
-4. Enable the listener. The default port is `45980`.
-5. Create an invitation and paste it into the iOS app. The desktop page intentionally returns the secret once. Do not put it in chat logs, issue trackers, or a shared clipboard.
+1. Install and sign in to Tailscale on the UOS host and mobile device with the same tailnet.
+2. In UOS AI select **iOS Companion** from the title-bar menu; its settings page is named **Mobile Companion**.
+3. Select a displayed Tailscale address, the host's ASCII `*.ts.net` tailnet hostname, and paths to its matching PEM TLS certificate and private key. Select one or more existing workspaces. Do not share workspaces that contain conversations you do not intend to expose to the selected device.
+4. Save the settings and enable the listener. It listens securely on the selected local Tailscale address; the default port is `45980`.
+5. Create an invitation, then scan the rendered QR code or open/paste the invitation in the iOS or Android app. The desktop page intentionally returns the secret once. Do not put it in chat logs, issue trackers, or a shared clipboard.
 6. Verify the connected device label, then revoke it immediately if the phone is lost or replaced.
 
-The current desktop page provides a copyable URI. It does not yet render a QR image; the iOS pairing screen supports a pasted URI. Add camera/QR operation only after a macOS/iPhone validation pass.
+The exact QR payload is the copyable `uos-ai://pair?...` URI. Android also registers that scheme as a system deep link, so scanning it with the system camera can hand it directly to the companion. A malformed, public-host, or expired invitation is rejected before any connection attempt.
 
 ## Recovery and backup
 
@@ -44,4 +45,4 @@ Replace the tag and group with values from the actual tailnet:
 
 ## Required real-device validation
 
-Before enabling this broadly, verify from an iPhone on the same tailnet that an unpaired client cannot read data, an allowed device can continue a durable conversation, reconnect cursor replay has no duplicate bubbles, cancel works, approval requires an explicit tap, and revocation blocks the next command.
+Before enabling this broadly, verify from each supported mobile platform on the same tailnet that an unpaired client cannot read data, an allowed device can continue a durable conversation, reconnect cursor replay has no duplicate bubbles, cancel works, approval requires an explicit tap, and revocation blocks the next command.

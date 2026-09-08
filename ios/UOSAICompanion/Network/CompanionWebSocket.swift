@@ -153,6 +153,6 @@ actor CompanionWebSocket {
 
     private func webSocketURL(for grant: DeviceGrant) -> URL? {
         let host = grant.host.contains(":") ? "[\(grant.host)]" : grant.host
-        return URL(string: "ws://\(host):\(grant.port)")
+        return URL(string: "wss://\(host):\(grant.port)")
     }
 }

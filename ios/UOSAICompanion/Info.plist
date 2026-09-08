@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>uos-ai</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>用于通过你的 Tailscale 私有网络连接 UOS AI。</string>
+</dict>
+</plist>

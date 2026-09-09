@@ -69,12 +69,7 @@ class CompanionWebSocket(
         sendRaw(RemoteJson.encode(PairFrame(payload = PairPayload(invitation.pairingSecret, deviceName))))
         val pairingGrant = awaitFrame { it is InboundFrame.PairingGranted }
             .let { it as InboundFrame.PairingGranted }.grant
-        val grant = DeviceGrant(
-            pairingGrant = pairingGrant,
-            host = invitation.host,
-            port = invitation.port,
-            hostDisplayName = invitation.hostDisplayName,
-        )
+        val grant = invitation.toDeviceGrant(pairingGrant)
         grantStore.save(grant)
         try {
             authenticate(grant)
@@ -234,5 +229,14 @@ class CompanionWebSocket(
         const val BASE_RETRY_MS = 1_000L
     }
 }
+
+internal fun PairingUri.toDeviceGrant(pairingGrant: org.deepin.uosai.companion.core.protocol.PairingGrant) = DeviceGrant(
+    pairingGrant = pairingGrant,
+    host = host,
+    port = port,
+    hostDisplayName = hostDisplayName,
+    transport = transport,
+    tlsSpkiSha256 = tlsSpkiSha256,
+)
 
 class CompanionSocketException(val code: String, override val message: String) : IllegalStateException(message)

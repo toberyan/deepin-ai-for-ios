@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,25 +19,32 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,32 +57,154 @@ import org.deepin.uosai.companion.app.TranscriptEntry
 import org.deepin.uosai.companion.app.TranscriptRole
 import org.deepin.uosai.companion.core.network.ConnectionState
 import org.deepin.uosai.companion.feature.pairing.PairingEntryMode
+import org.deepin.uosai.companion.feature.pairing.PairingInstructions
 import org.deepin.uosai.companion.feature.pairing.QrScannerDialog
 import org.deepin.uosai.companion.feature.pairing.showManualEntry
 import org.deepin.uosai.companion.feature.pairing.showScanner
+import kotlinx.coroutines.launch
 
-private val wideLayoutBreakpoint = 840.dp
+data class CompanionActions(
+    val reconnect: () -> Unit,
+    val pair: (String) -> Unit,
+    val dismissError: () -> Unit,
+    val selectWorkspace: (String) -> Unit,
+    val openConversation: (CompanionConversation) -> Unit,
+    val closeConversation: () -> Unit,
+    val startTurn: (String, String, String) -> Unit,
+    val cancelTurn: () -> Unit,
+    val answerApproval: (Boolean) -> Unit,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompanionApp(state: CompanionUiState, model: CompanionViewModel) {
+    CompanionContent(
+        state = state,
+        actions = CompanionActions(
+            reconnect = { model.reconnect() },
+            pair = { model.pair(it) },
+            dismissError = model::dismissError,
+            selectWorkspace = model::selectWorkspace,
+            openConversation = { model.openConversation(it) },
+            closeConversation = model::closeConversation,
+            startTurn = { message, assistantId, modelId -> model.startTurn(message, assistantId, modelId) },
+            cancelTurn = { model.cancelTurn() },
+            answerApproval = { model.answerApproval(it) },
+        ),
+    )
+}
+
+@Composable
+fun CompanionContent(state: CompanionUiState, actions: CompanionActions) {
     if (state.pairedHostName == null && state.workspaces.isEmpty()) {
         PairingScreen(
             connection = state.connection,
             error = state.errorMessage,
-            onPair = model::pair,
-            onDismissError = model::dismissError,
+            onPair = actions.pair,
+            onDismissError = actions.dismissError,
         )
         return
     }
 
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        when (workspaceNavigationLayoutFor(maxWidth.value)) {
+            WorkspaceNavigationLayout.OverlayDrawer -> TabletCompanionLayout(state, actions)
+            WorkspaceNavigationLayout.SinglePane -> PhoneCompanionLayout(state, actions)
+        }
+    }
+
+    state.pendingApproval?.let { approval ->
+        ApprovalSheet(
+            approval = approval,
+            onAnswer = actions.answerApproval,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TabletCompanionLayout(state: CompanionUiState, actions: CompanionActions) {
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val toggleDrawer: () -> Unit = {
+        scope.launch {
+            if (drawerState.isOpen) drawerState.close() else drawerState.open()
+        }
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(Modifier.width(280.dp)) {
+                WorkspacePane(
+                    workspaces = state.workspaces,
+                    selectedWorkspaceId = state.selectedWorkspaceId,
+                    selectedConversation = state.selectedConversation,
+                    onWorkspace = actions.selectWorkspace,
+                    onConversation = { conversation ->
+                        actions.openConversation(conversation)
+                        scope.launch { drawerState.close() }
+                    },
+                    onDismiss = toggleDrawer,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        },
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(state.pairedHostName ?: "UOS AI Companion") },
+                    navigationIcon = {
+                        IconButton(onClick = toggleDrawer) {
+                            Text(
+                                text = if (drawerState.isOpen) "×" else "☰",
+                                modifier = Modifier.semantics {
+                                    contentDescription = if (drawerState.isOpen) {
+                                        "Close shared workspaces"
+                                    } else {
+                                        "Open shared workspaces"
+                                    }
+                                },
+                            )
+                        }
+                    },
+                    actions = {
+                        AssistChip(
+                            onClick = actions.reconnect,
+                            label = { Text(connectionLabel(state.connection)) },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    },
+                )
+            },
+        ) { contentPadding ->
+            Column(Modifier.fillMaxSize().padding(contentPadding)) {
+                state.errorMessage?.let { error ->
+                    ErrorBanner(error, actions.dismissError)
+                }
+                ConversationPane(
+                    state = state,
+                    onSend = actions.startTurn,
+                    onCancel = actions.cancelTurn,
+                    onBack = null,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PhoneCompanionLayout(state: CompanionUiState, actions: CompanionActions) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(state.pairedHostName ?: "UOS AI Companion") },
                 actions = {
                     AssistChip(
-                        onClick = model::reconnect,
+                        onClick = actions.reconnect,
                         label = { Text(connectionLabel(state.connection)) },
                     )
                     Spacer(Modifier.width(8.dp))
@@ -86,56 +214,27 @@ fun CompanionApp(state: CompanionUiState, model: CompanionViewModel) {
     ) { contentPadding ->
         Column(Modifier.fillMaxSize().padding(contentPadding)) {
             state.errorMessage?.let { error ->
-                ErrorBanner(error, model::dismissError)
+                ErrorBanner(error, actions.dismissError)
             }
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val wide = maxWidth >= wideLayoutBreakpoint
-                if (wide) {
-                    Row(Modifier.fillMaxSize()) {
-                        WorkspacePane(
-                            workspaces = state.workspaces,
-                            selectedWorkspaceId = state.selectedWorkspaceId,
-                            selectedConversation = state.selectedConversation,
-                            onWorkspace = model::selectWorkspace,
-                            onConversation = model::openConversation,
-                            modifier = Modifier.width(360.dp).fillMaxHeight(),
-                        )
-                        VerticalDivider()
-                        ConversationPane(
-                            state = state,
-                            onSend = model::startTurn,
-                            onCancel = model::cancelTurn,
-                            onBack = null,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                } else if (state.selectedConversation == null) {
-                    WorkspacePane(
-                        workspaces = state.workspaces,
-                        selectedWorkspaceId = state.selectedWorkspaceId,
-                        selectedConversation = null,
-                        onWorkspace = model::selectWorkspace,
-                        onConversation = model::openConversation,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    ConversationPane(
-                        state = state,
-                        onSend = model::startTurn,
-                        onCancel = model::cancelTurn,
-                        onBack = model::closeConversation,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+            if (state.selectedConversation == null) {
+                WorkspacePane(
+                    workspaces = state.workspaces,
+                    selectedWorkspaceId = state.selectedWorkspaceId,
+                    selectedConversation = null,
+                    onWorkspace = actions.selectWorkspace,
+                    onConversation = actions.openConversation,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                ConversationPane(
+                    state = state,
+                    onSend = actions.startTurn,
+                    onCancel = actions.cancelTurn,
+                    onBack = actions.closeConversation,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
-    }
-
-    state.pendingApproval?.let { approval ->
-        ApprovalSheet(
-            approval = approval,
-            onAnswer = model::answerApproval,
-        )
     }
 }
 
@@ -154,7 +253,7 @@ private fun PairingScreen(
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("Connect UOS AI", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "Scan the one-time QR code from UOS AI desktop. This companion only accepts secure Tailscale .ts.net invitations.",
+                    PairingInstructions.summary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (entryMode == PairingEntryMode.Scanner) {
@@ -209,11 +308,27 @@ private fun WorkspacePane(
     selectedConversation: CompanionConversation?,
     onWorkspace: (String) -> Unit,
     onConversation: (CompanionConversation) -> Unit,
+    onDismiss: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text("Shared workspaces", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Shared workspaces",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                onDismiss?.let { dismiss ->
+                    IconButton(onClick = dismiss) {
+                        Text(
+                            "×",
+                            modifier = Modifier.semantics { contentDescription = "Close shared workspaces" },
+                        )
+                    }
+                }
+            }
             Text("Only conversations explicitly shared by UOS AI are shown here.", style = MaterialTheme.typography.bodySmall)
         }
         if (workspaces.isEmpty()) item { Text("No shared workspaces yet.", modifier = Modifier.padding(top = 24.dp)) }

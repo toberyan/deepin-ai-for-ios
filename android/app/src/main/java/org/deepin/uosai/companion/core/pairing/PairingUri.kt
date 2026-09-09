@@ -3,6 +3,9 @@ package org.deepin.uosai.companion.core.pairing
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.Base64
+
+enum class PairingTransport { TAILNET, LOCAL }
 
 /** A single-use invitation emitted by the UOS AI desktop companion settings page. */
 data class PairingUri(
@@ -11,6 +14,8 @@ data class PairingUri(
     val pairingSecret: String,
     val expiresAtMs: Long,
     val hostDisplayName: String,
+    val transport: PairingTransport,
+    val tlsSpkiSha256: String? = null,
 ) {
     /**
      * Production companion connections are deliberately certificate-verified WSS.
@@ -19,7 +24,7 @@ data class PairingUri(
     fun webSocketUrl(): String = "wss://$host:$port/"
 
     companion object {
-        private val expectedParameters = setOf(
+        private val v1Parameters = setOf(
             "v",
             "host",
             "port",
@@ -27,6 +32,7 @@ data class PairingUri(
             "expiresAtMs",
             "hostDisplayName",
         )
+        private val v2Parameters = v1Parameters + setOf("transport", "tlsSpkiSha256")
 
         fun parse(raw: String, nowMs: Long = System.currentTimeMillis()): PairingUri {
             val uri = try {
@@ -39,11 +45,14 @@ data class PairingUri(
             }
 
             val values = parseQuery(uri.rawQuery ?: "")
+            val version = values["v"]
+            val expectedParameters = when (version) {
+                "1" -> v1Parameters
+                "2" -> v2Parameters
+                else -> throw PairingUriError.MissingOrInvalidParameter
+            }
             if (values.keys.any { it !in expectedParameters }) {
                 throw PairingUriError.UnexpectedParameter
-            }
-            if (values["v"] != "1") {
-                throw PairingUriError.MissingOrInvalidParameter
             }
 
             val host = values.required("host").lowercase()
@@ -54,14 +63,25 @@ data class PairingUri(
                 ?: throw PairingUriError.MissingOrInvalidParameter
             val displayName = values.required("hostDisplayName")
 
-            if (!isSafeTailnetHostname(host)) {
-                throw PairingUriError.UnsafeHost
+            val (transport, tlsSpkiSha256) = when (version) {
+                "1" -> {
+                    if (!isSafeTailnetHostname(host)) throw PairingUriError.UnsafeHost
+                    PairingTransport.TAILNET to null
+                }
+                "2" -> {
+                    if (values.required("transport") != "local") {
+                        throw PairingUriError.MissingOrInvalidParameter
+                    }
+                    if (!isEligibleLocalIpv4(host)) throw PairingUriError.UnsafeHost
+                    PairingTransport.LOCAL to values.required("tlsSpkiSha256").also(::validateTlsSpkiSha256)
+                }
+                else -> throw PairingUriError.MissingOrInvalidParameter
             }
             if (expiresAtMs <= nowMs) {
                 throw PairingUriError.Expired
             }
 
-            return PairingUri(host, port, pairingSecret, expiresAtMs, displayName)
+            return PairingUri(host, port, pairingSecret, expiresAtMs, displayName, transport, tlsSpkiSha256)
         }
 
         private fun Map<String, String>.required(name: String): String =
@@ -95,6 +115,38 @@ data class PairingUri(
                 label.isNotEmpty() && label.length <= 63 &&
                     label.first().isLetterOrDigit() && label.last().isLetterOrDigit() &&
                     label.all { it.isLetterOrDigit() || it == '-' }
+            }
+        }
+
+        private fun isEligibleLocalIpv4(host: String): Boolean {
+            val octets = host.split('.')
+            if (octets.size != 4) return false
+            val values = octets.map { octet ->
+                if (octet.isEmpty() || (octet.length > 1 && octet.startsWith('0')) ||
+                    octet.any { !it.isDigit() }
+                ) {
+                    return false
+                }
+                octet.toIntOrNull()?.takeIf { it in 0..255 } ?: return false
+            }
+            val (first, second) = values
+            return first == 10 ||
+                (first == 172 && second in 16..31) ||
+                (first == 192 && second == 168) ||
+                (first == 100 && second in 64..127)
+        }
+
+        private fun validateTlsSpkiSha256(value: String) {
+            if (!value.matches(Regex("[A-Za-z0-9_-]+"))) {
+                throw PairingUriError.MissingOrInvalidParameter
+            }
+            val bytes = try {
+                Base64.getUrlDecoder().decode(value)
+            } catch (_: IllegalArgumentException) {
+                throw PairingUriError.MissingOrInvalidParameter
+            }
+            if (bytes.size != 32 || Base64.getUrlEncoder().withoutPadding().encodeToString(bytes) != value) {
+                throw PairingUriError.MissingOrInvalidParameter
             }
         }
     }

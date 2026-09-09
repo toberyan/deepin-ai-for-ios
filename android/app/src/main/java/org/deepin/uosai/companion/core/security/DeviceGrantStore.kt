@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.deepin.uosai.companion.core.pairing.PairingTransport
 import org.deepin.uosai.companion.core.protocol.PairingGrant
 
 @Serializable
@@ -21,6 +22,8 @@ data class DeviceGrant(
     val host: String,
     val port: Int,
     val hostDisplayName: String,
+    val transport: PairingTransport = PairingTransport.TAILNET,
+    val tlsSpkiSha256: String? = null,
 )
 
 interface DeviceGrantStore {

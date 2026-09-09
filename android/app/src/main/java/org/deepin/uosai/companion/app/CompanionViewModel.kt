@@ -76,7 +76,7 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     loadWorkspaces()
                 }
-                .onFailure { showError("Pairing failed. Confirm that Tailscale is connected and scan a fresh QR code.") }
+                .onFailure { showError("Pairing failed. Confirm this device can reach the selected network and scan a fresh QR code.") }
         }
     }
 

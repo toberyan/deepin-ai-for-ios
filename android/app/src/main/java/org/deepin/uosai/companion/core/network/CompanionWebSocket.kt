@@ -65,7 +65,7 @@ class CompanionWebSocket(
     override val connectionState: StateFlow<ConnectionState> = mutableConnectionState.asStateFlow()
 
     override suspend fun pair(invitation: PairingUri, deviceName: String): DeviceGrant = operationMutex.withLock {
-        open(invitation.webSocketUrl())
+        open(invitation.webSocketUrl(), clientFor(invitation.transport, invitation.host, invitation.tlsSpkiSha256))
         sendRaw(RemoteJson.encode(PairFrame(payload = PairPayload(invitation.pairingSecret, deviceName))))
         val pairingGrant = awaitFrame { it is InboundFrame.PairingGranted }
             .let { it as InboundFrame.PairingGranted }.grant
@@ -82,7 +82,7 @@ class CompanionWebSocket(
 
     override suspend fun connectSavedGrant(): DeviceGrant? = operationMutex.withLock {
         val grant = grantStore.load() ?: return null
-        open("wss://${grant.host}:${grant.port}/")
+        open("wss://${grant.host}:${grant.port}/", clientFor(grant.transport, grant.host, grant.tlsSpkiSha256))
         authenticate(grant)
         grant
     }
@@ -125,12 +125,12 @@ class CompanionWebSocket(
         }
     }
 
-    private suspend fun open(url: String) {
+    private suspend fun open(url: String, connectionClient: OkHttpClient) {
         close()
         manuallyClosed = false
         mutableConnectionState.value = ConnectionState.Connecting
         val opened = CompletableDeferred<Unit>()
-        val nextSocket = client.newWebSocket(
+        val nextSocket = connectionClient.newWebSocket(
             Request.Builder().url(url).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -202,7 +202,10 @@ class CompanionWebSocket(
                     delay(retryAfterMs)
                     try {
                         operationMutex.withLock {
-                            open("wss://${grant.host}:${grant.port}/")
+                            open(
+                                "wss://${grant.host}:${grant.port}/",
+                                clientFor(grant.transport, grant.host, grant.tlsSpkiSha256),
+                            )
                             authenticate(grant)
                         }
                         return@launchSafe
@@ -221,6 +224,13 @@ class CompanionWebSocket(
     }
 
     private fun CoroutineScope.launchSafe(block: suspend () -> Unit) = launch { block() }
+
+    private fun clientFor(transport: org.deepin.uosai.companion.core.pairing.PairingTransport, host: String, pin: String?): OkHttpClient =
+        when (transport) {
+            org.deepin.uosai.companion.core.pairing.PairingTransport.TAILNET -> client
+            org.deepin.uosai.companion.core.pairing.PairingTransport.LOCAL ->
+                PinnedTlsClientFactory.create(transport, host, pin)
+        }
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 10_000L

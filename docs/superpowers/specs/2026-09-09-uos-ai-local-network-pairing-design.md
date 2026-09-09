@@ -4,6 +4,8 @@
 
 UOS AI Companion 的首个可用传输模式采用 **局域网直连**。它可以通过当前 Wi-Fi，或在设备已有 Tailscale 网络路径时通过 Tailscale IP 连接；Tailscale 只提供路由可达性，不参与身份验证、账号登录或 HTTPS 证书签发。
 
+当前迭代只实现并验收 Android 客户端。iOS 客户端改造、兼容和实机验证不在本轮范围；它将在 Android 配对端到端稳定后，以同一 v2 协议单独规划。
+
 这项设计取材于 Orca 的配对页：用户选择 `局域网`，选择本机可达网络地址，扫描一次性二维码完成配对。`Orca Relay` 入口会保留为“试验阶段”，但在 UOS AI 建立独立中继和账号授权服务之前不可选择。
 
 本设计取代旧的 `tailscale cert` / `*.ts.net` 配对前置条件。用户不需要进入 Tailscale 管理后台，也不需要启用 HTTPS Certificates。
@@ -21,6 +23,7 @@ UOS AI Companion 的首个可用传输模式采用 **局域网直连**。它可�
 ### 非目标
 
 - 不实现可用的 Relay、中继服务、Orca 账号、云端账号登录或公网穿透。
+- 不修改或验收 iOS 客户端；iOS 不作为当前协议迁移的发布目标。
 - 不使用 Tailscale Funnel、管理后台 HTTPS Certificates、`tailscale cert` 或 `*.ts.net` 域名。
 - 不监听 `QHostAddress::Any`、不暴露公开端口、不回退到明文 WebSocket。
 - 不对已有已配对设备做无感迁移；它们需在新协议下重新扫描配对。

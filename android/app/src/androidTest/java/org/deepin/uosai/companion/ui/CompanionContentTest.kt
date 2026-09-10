@@ -1,16 +1,22 @@
 package org.deepin.uosai.companion.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.deepin.uosai.companion.app.CompanionConversation
 import org.deepin.uosai.companion.app.CompanionUiState
-import org.deepin.uosai.companion.app.CompanionWorkspace
-import org.junit.Assert.assertEquals
+import org.deepin.uosai.companion.app.ConversationCreationOptions
+import org.deepin.uosai.companion.app.CreationAgent
+import org.deepin.uosai.companion.app.CreationModel
+import org.deepin.uosai.companion.app.CreationWorkspace
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,26 +27,33 @@ class CompanionContentTest {
     val composeRule = createAndroidComposeRule<ComposeTestActivity>()
 
     @Test
-    fun tabletDrawerStartsOpenAndClosesAfterOpeningAConversation() {
+    fun recentConversationsOpenTheThreeChoiceCreationFlowWithoutAWorkbench() {
         val conversation = CompanionConversation("conversation-1", "Planning")
-        var openedConversation: CompanionConversation? = null
+        val options = ConversationCreationOptions(
+            workspaces = listOf(CreationWorkspace("workspace-1", "Product")),
+            agents = listOf(CreationAgent("agent-1", "UOS AI", listOf(CreationModel("model-1", "Model 1")))),
+        )
 
         composeRule.setContent {
+            var showCreation by mutableStateOf(false)
             MaterialTheme {
                 CompanionContent(
                     state = CompanionUiState(
                         pairedHostName = "UOS AI",
-                        workspaces = listOf(CompanionWorkspace("workspace-1", "Product", listOf(conversation))),
-                        selectedWorkspaceId = "workspace-1",
+                        conversations = listOf(conversation),
+                        creationOptions = if (showCreation) options else null,
                     ),
                     actions = CompanionActions(
                         reconnect = {},
                         pair = {},
                         dismissError = {},
                         selectWorkspace = {},
-                        openConversation = { openedConversation = it },
+                        openConversation = {},
                         closeConversation = {},
-                        startTurn = { _, _, _ -> },
+                        openNewConversation = { showCreation = true },
+                        closeNewConversation = { showCreation = false },
+                        createConversation = { _, _, _ -> },
+                        startTurn = {},
                         cancelTurn = {},
                         answerApproval = {},
                     ),
@@ -48,10 +61,12 @@ class CompanionContentTest {
             }
         }
 
-        composeRule.onNodeWithText("Shared workspaces").assertIsDisplayed()
-        composeRule.onNodeWithText("Planning").performClick()
-
-        composeRule.runOnIdle { assertEquals(conversation, openedConversation) }
-        composeRule.onNodeWithText("Shared workspaces").assertIsNotDisplayed()
+        composeRule.onNodeWithText("Recent conversations").assertIsDisplayed()
+        composeRule.onNodeWithText("New conversation").performClick()
+        composeRule.onNodeWithText("Choose workspace").assertIsDisplayed()
+        composeRule.onNodeWithText("Choose Agent").assertIsDisplayed()
+        composeRule.onNodeWithText("Choose model").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Agent workbench").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Activity").assertCountEquals(0)
     }
 }

@@ -142,7 +142,7 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
             mutableState.value = current.copy(
                 workspaces = workspaces,
                 conversations = conversations,
-                selectedWorkspaceId = current.selectedWorkspaceId ?: workspaces.firstOrNull()?.id,
+                selectedWorkspaceId = current.selectedWorkspaceId,
                 errorMessage = null,
             )
             subscribeTo(conversations)
@@ -153,7 +153,7 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         }.onFailure { showError("Unable to load shared workspaces.") }
     }
 
-    fun selectWorkspace(workspaceId: String) {
+    fun selectWorkspace(workspaceId: String?) {
         mutableState.value = mutableState.value.copy(selectedWorkspaceId = workspaceId)
     }
 

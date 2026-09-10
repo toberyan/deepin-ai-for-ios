@@ -15,6 +15,16 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import org.deepin.uosai.companion.app.ArtifactRef
+import org.deepin.uosai.companion.app.CompanionConversation
+import org.deepin.uosai.companion.app.ConversationContent
+import org.deepin.uosai.companion.app.ConversationCreationOptions
+import org.deepin.uosai.companion.app.CreationAgent
+import org.deepin.uosai.companion.app.CreationModel
+import org.deepin.uosai.companion.app.CreationWorkspace
+import org.deepin.uosai.companion.app.PreviewKind
+import org.deepin.uosai.companion.app.RenderBlock
+import org.deepin.uosai.companion.app.TaskStatus
 
 object RemoteProtocol {
     const val major = 1
@@ -34,6 +44,27 @@ data class CommandFrame(
 ) {
     companion object {
         fun listWorkspaces(requestId: String) = CommandFrame(requestId = requestId, command = "list_workspaces", payload = buildJsonObject { })
+
+        fun getConversationCreationOptions(requestId: String) = CommandFrame(
+            requestId = requestId,
+            command = "get_conversation_creation_options",
+            payload = buildJsonObject { },
+        )
+
+        fun createConversation(
+            requestId: String,
+            workspaceId: String,
+            assistantId: String,
+            modelId: String,
+        ) = CommandFrame(
+            requestId = requestId,
+            command = "create_conversation",
+            payload = buildJsonObject {
+                put("workspaceId", workspaceId)
+                put("assistantId", assistantId)
+                put("modelId", modelId)
+            },
+        )
 
         fun getConversation(requestId: String, conversationId: String) = CommandFrame(
             requestId = requestId,
@@ -145,6 +176,7 @@ sealed interface RemoteEvent {
     data object AgentRunDelta : RemoteEvent
     data object AgentActivityDelta : RemoteEvent
     data object ArtifactDelta : RemoteEvent
+    data object TaskStatusDelta : RemoteEvent
     data class Unknown(val wireName: String) : RemoteEvent
 
     companion object {
@@ -159,9 +191,108 @@ sealed interface RemoteEvent {
             "agent_run_delta" -> AgentRunDelta
             "agent_activity_delta" -> AgentActivityDelta
             "artifact_delta" -> ArtifactDelta
+            "task_status_delta" -> TaskStatusDelta
             else -> Unknown(wireName)
         }
     }
+}
+
+object ConversationFrame {
+    fun taskStatus(value: String?): TaskStatus? = when (value) {
+        "running" -> TaskStatus.Running
+        "awaiting_approval" -> TaskStatus.AwaitingApproval
+        "completed" -> TaskStatus.Completed
+        "failed" -> TaskStatus.Failed
+        else -> null
+    }
+
+    fun parseConversation(value: JsonObject, fallbackWorkspaceId: String = ""): CompanionConversation? {
+        val id = value.string("id") ?: value.string("conversationId") ?: return null
+        return CompanionConversation(
+            id = id,
+            title = value.string("title") ?: "Conversation",
+            workspaceId = value.string("workspaceId") ?: fallbackWorkspaceId,
+            updatedAt = value.long("updatedAt")
+                ?: value.long("updated_at")
+                ?: 0L,
+            assistantId = value.string("assistantId") ?: "",
+            modelId = value.string("modelId") ?: "",
+            taskStatus = taskStatus(value.string("taskStatus")),
+            sequence = value.long("sequence") ?: 0L,
+        )
+    }
+
+    fun parseCreationOptions(value: JsonObject): ConversationCreationOptions = ConversationCreationOptions(
+        workspaces = value.objects("workspaces").mapNotNull { workspace ->
+            workspace.string("id")?.let { id -> CreationWorkspace(id, workspace.string("label") ?: id) }
+        },
+        agents = value.objects("agents").mapNotNull { agent ->
+            agent.string("id")?.let { id ->
+                CreationAgent(
+                    id = id,
+                    name = agent.string("name") ?: id,
+                    models = agent.objects("models").mapNotNull { model ->
+                        model.string("id")?.let { modelId -> CreationModel(modelId, model.string("name") ?: modelId) }
+                    },
+                )
+            }
+        },
+    )
+
+    fun parseContent(value: JsonObject?): ConversationContent {
+        if (value == null) return ConversationContent()
+        val artifacts = value.objects("artifacts").mapNotNull(::parseArtifact).associateBy(ArtifactRef::id)
+        return ConversationContent(
+            blocks = value.objects("blocks").mapNotNull(::parseRenderBlock),
+            artifacts = artifacts,
+        )
+    }
+
+    private fun parseArtifact(value: JsonObject): ArtifactRef? {
+        val id = value.string("id") ?: return null
+        val name = value.string("name") ?: return null
+        return ArtifactRef(
+            id = id,
+            name = name,
+            previewKind = previewKind(value.string("previewKind")),
+            revision = value.string("revision") ?: "",
+        )
+    }
+
+    private fun parseRenderBlock(value: JsonObject): RenderBlock? {
+        val id = value.string("id") ?: return null
+        val kind = value.string("kind") ?: return null
+        val payload = value["payload"] as? JsonObject ?: return null
+        return when (kind) {
+            "markdown" -> payload.string("text")?.let { RenderBlock.Markdown(id, it) }
+            "code" -> payload.string("text")?.let { RenderBlock.Code(id, payload.string("language") ?: "", it) }
+            "image" -> payload.string("base64")?.let { base64 ->
+                payload.string("mimeType")?.let { RenderBlock.Image(id, base64, it) }
+            }
+            "file_reference" -> payload.string("artifactId")?.let { artifactId ->
+                RenderBlock.FileReference(id, artifactId, payload.string("label") ?: "Artifact")
+            }
+            else -> RenderBlock.Unsupported(id, kind)
+        }
+    }
+
+    private fun previewKind(value: String?): PreviewKind = when (value) {
+        "text" -> PreviewKind.Text
+        "image" -> PreviewKind.Image
+        "static_markup" -> PreviewKind.StaticMarkup
+        "html_document" -> PreviewKind.HtmlDocument
+        "file_reference" -> PreviewKind.FileReference
+        else -> PreviewKind.Unknown
+    }
+
+    private fun JsonObject.string(name: String): String? =
+        (get(name) as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
+
+    private fun JsonObject.long(name: String): Long? =
+        (get(name) as? JsonPrimitive)?.longOrNull
+
+    private fun JsonObject.objects(name: String): List<JsonObject> =
+        (get(name) as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
 }
 
 data class RemoteEventFrame(

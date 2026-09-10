@@ -22,14 +22,13 @@ import org.deepin.uosai.companion.core.network.CompanionWebSocket
 import org.deepin.uosai.companion.core.network.ConnectionState
 import org.deepin.uosai.companion.core.pairing.PairingUri
 import org.deepin.uosai.companion.core.protocol.CommandFrame
+import org.deepin.uosai.companion.core.protocol.ConversationFrame
 import org.deepin.uosai.companion.core.protocol.InboundFrame
 import org.deepin.uosai.companion.core.protocol.RemoteEvent
 import org.deepin.uosai.companion.core.protocol.RemoteEventFrame
 import org.deepin.uosai.companion.core.protocol.WorkbenchFrame
 import org.deepin.uosai.companion.core.security.KeystoreDeviceGrantStore
 
-data class CompanionWorkspace(val id: String, val label: String, val conversations: List<CompanionConversation>)
-data class CompanionConversation(val id: String, val title: String)
 data class TranscriptEntry(val id: String, val role: TranscriptRole, val text: String)
 enum class TranscriptRole { User, Assistant, System }
 data class AgentApproval(val id: String, val actionType: String, val title: String, val details: JsonObject)
@@ -37,6 +36,8 @@ data class AgentApproval(val id: String, val actionType: String, val title: Stri
 internal data class ConversationSnapshotProjection(
     val transcript: List<TranscriptEntry>,
     val workbench: WorkbenchState,
+    val content: ConversationContent,
+    val taskStatus: TaskStatus?,
 )
 
 internal fun conversationSnapshotProjection(result: JsonObject): ConversationSnapshotProjection {
@@ -45,6 +46,8 @@ internal fun conversationSnapshotProjection(result: JsonObject): ConversationSna
         transcript = transcriptEntries(result["render"] as? JsonObject),
         workbench = WorkbenchFrame.parseSnapshot(result["workbench"] as? JsonObject, sequence)
             ?: WorkbenchState(sequence = sequence),
+        content = ConversationFrame.parseContent(result["content"] as? JsonObject),
+        taskStatus = ConversationFrame.taskStatus(result.stringValue("taskStatus")),
     )
 }
 

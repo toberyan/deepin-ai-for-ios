@@ -55,9 +55,13 @@ data class CompanionUiState(
     val connection: ConnectionState = ConnectionState.Disconnected,
     val pairedHostName: String? = null,
     val workspaces: List<CompanionWorkspace> = emptyList(),
+    val conversations: List<CompanionConversation> = emptyList(),
     val selectedWorkspaceId: String? = null,
     val selectedConversation: CompanionConversation? = null,
+    val creationOptions: ConversationCreationOptions? = null,
+    val creatingConversation: Boolean = false,
     val transcript: List<TranscriptEntry> = emptyList(),
+    val content: ConversationContent = ConversationContent(),
     val workbench: WorkbenchState = WorkbenchState(),
     val selectedAgentRunId: String? = null,
     val selectedArtifact: ArtifactRef? = null,
@@ -133,15 +137,17 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         }.onSuccess { frame ->
             val result = frame.commandResult() ?: return@onSuccess showFrameError(frame, "Unable to load shared workspaces.")
             val workspaces = (result["workspaces"] as? JsonArray).orEmpty().mapNotNull(::parseWorkspace)
+            val conversations = flattenRecentConversations(workspaces)
             val current = mutableState.value
             mutableState.value = current.copy(
                 workspaces = workspaces,
+                conversations = conversations,
                 selectedWorkspaceId = current.selectedWorkspaceId ?: workspaces.firstOrNull()?.id,
                 errorMessage = null,
             )
+            subscribeTo(conversations)
             resumeConversationId?.let { conversationId ->
-                workspaces.asSequence().flatMap { it.conversations.asSequence() }
-                    .firstOrNull { it.id == conversationId }
+                conversations.firstOrNull { it.id == conversationId }
                     ?.let(::openConversation)
             }
         }.onFailure { showError("Unable to load shared workspaces.") }
@@ -151,10 +157,65 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         mutableState.value = mutableState.value.copy(selectedWorkspaceId = workspaceId)
     }
 
+    fun openNewConversation() = viewModelScope.launch {
+        runCatching {
+            socket.request(CommandFrame.getConversationCreationOptions(requestId()))
+        }.onSuccess { frame ->
+            val result = frame.commandResult() ?: return@onSuccess showFrameError(frame, "Unable to load conversation choices.")
+            mutableState.value = mutableState.value.copy(
+                creationOptions = ConversationFrame.parseCreationOptions(result),
+                errorMessage = null,
+            )
+        }.onFailure { showError("Unable to load conversation choices.") }
+    }
+
+    fun closeNewConversation() {
+        mutableState.value = mutableState.value.copy(creationOptions = null, creatingConversation = false)
+    }
+
+    fun createConversation(workspaceId: String, assistantId: String, modelId: String) = viewModelScope.launch {
+        if (workspaceId.isBlank() || assistantId.isBlank() || modelId.isBlank() || mutableState.value.creatingConversation) return@launch
+        mutableState.value = mutableState.value.copy(creatingConversation = true)
+        runCatching {
+            socket.request(CommandFrame.createConversation(requestId(), workspaceId, assistantId, modelId))
+        }.onSuccess { frame ->
+            val result = frame.commandResult() ?: run {
+                mutableState.value = mutableState.value.copy(creatingConversation = false)
+                return@onSuccess showFrameError(frame, "Unable to create a conversation.")
+            }
+            val created = ConversationFrame.parseConversation(result, workspaceId)
+                ?: run {
+                    mutableState.value = mutableState.value.copy(creatingConversation = false)
+                    return@onSuccess showError("UOS AI returned an invalid conversation.")
+                }
+            val current = mutableState.value
+            val updatedWorkspaces = current.workspaces.map { workspace ->
+                if (workspace.id == created.workspaceId) {
+                    workspace.copy(conversations = addRecentConversation(workspace.conversations, created))
+                } else {
+                    workspace
+                }
+            }
+            mutableState.value = current.copy(
+                workspaces = updatedWorkspaces,
+                conversations = addRecentConversation(current.conversations, created),
+                selectedWorkspaceId = created.workspaceId,
+                creationOptions = null,
+                creatingConversation = false,
+                errorMessage = null,
+            )
+            openConversation(created)
+        }.onFailure {
+            mutableState.value = mutableState.value.copy(creatingConversation = false)
+            showError("Unable to create a conversation.")
+        }
+    }
+
     fun openConversation(conversation: CompanionConversation) {
         mutableState.value = mutableState.value.copy(
             selectedConversation = conversation,
             transcript = emptyList(),
+            content = ConversationContent(),
             workbench = WorkbenchState(),
             selectedAgentRunId = null,
             selectedArtifact = null,
@@ -170,6 +231,7 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         mutableState.value = mutableState.value.copy(
             selectedConversation = null,
             transcript = emptyList(),
+            content = ConversationContent(),
             workbench = WorkbenchState(),
             selectedAgentRunId = null,
             selectedArtifact = null,
@@ -178,9 +240,8 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         )
     }
 
-    fun startTurn(message: String, assistantId: String, modelId: String) = viewModelScope.launch {
+    fun startTurn(message: String, assistantId: String = "uos-claw", modelId: String = "deepseek-chat") = viewModelScope.launch {
         val current = mutableState.value
-        val workspace = current.selectedWorkspace ?: return@launch
         val conversation = current.selectedConversation ?: return@launch
         if (message.isBlank() || current.activeTurn) return@launch
         mutableState.value = current.copy(
@@ -188,7 +249,16 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
             transcript = current.transcript + TranscriptEntry(requestId(), TranscriptRole.User, message),
         )
         runCatching {
-            socket.send(CommandFrame.startTurn(requestId(), workspace.id, conversation.id, message, assistantId, modelId))
+            socket.send(
+                CommandFrame.startTurn(
+                    requestId(),
+                    conversation.workspaceId.ifBlank { current.selectedWorkspace?.id.orEmpty() },
+                    conversation.id,
+                    message,
+                    conversation.assistantId.ifBlank { assistantId },
+                    conversation.modelId.ifBlank { modelId },
+                ),
+            )
         }.onFailure {
             mutableState.value = mutableState.value.copy(activeTurn = false)
             showError("Unable to send the message.")
@@ -324,7 +394,24 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun handleEvent(frame: RemoteEventFrame) {
         val current = mutableState.value
-        if (frame.conversationId != current.selectedConversation?.id) return
+        val status = if (frame.event == RemoteEvent.TaskStatusDelta) {
+            ConversationFrame.taskStatus(frame.payload.stringValue("taskStatus"))
+        } else {
+            null
+        }
+        val conversations = if (frame.event == RemoteEvent.TaskStatusDelta) {
+            reduceConversationStatus(current.conversations, frame.conversationId, status, frame.sequence)
+        } else {
+            current.conversations
+        }
+        val selected = conversations.firstOrNull { it.id == current.selectedConversation?.id }
+            ?: current.selectedConversation
+        if (frame.conversationId != current.selectedConversation?.id) {
+            if (conversations != current.conversations) {
+                mutableState.value = current.copy(conversations = conversations, selectedConversation = selected)
+            }
+            return
+        }
         val reduced = reduceWorkbench(current.workbench, frame)
         val reducedState = when (reduced) {
             is WorkbenchReduceResult.Applied -> reduced.state
@@ -334,7 +421,7 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
                 return
             }
         }
-        var next = current.copy(workbench = reducedState)
+        var next = current.copy(conversations = conversations, selectedConversation = selected, workbench = reducedState)
         if (frame.event == RemoteEvent.AgentRunDelta) {
             next = next.copy(activeTurn = reducedState.hasActiveRun())
         }
@@ -357,7 +444,10 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             }
-            RemoteEvent.TurnFinished, RemoteEvent.TurnFailed -> next = next.copy(activeTurn = false)
+            RemoteEvent.TurnFinished, RemoteEvent.TurnFailed -> {
+                next = next.copy(activeTurn = false)
+                reloadConversationSnapshot(next.selectedConversation)
+            }
             else -> Unit
         }
         mutableState.value = next
@@ -394,12 +484,32 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun subscribeTo(conversations: List<CompanionConversation>) {
+        if (conversations.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                socket.request(
+                    CommandFrame.subscribe(
+                        requestId(),
+                        conversations.associate { conversation -> conversation.id to conversation.sequence },
+                    ),
+                )
+            }.onFailure { showError("Unable to subscribe to conversation updates.") }
+        }
+    }
+
     private fun applyConversationSnapshot(conversation: CompanionConversation, result: JsonObject) {
         if (mutableState.value.selectedConversation?.id != conversation.id) return
         val snapshot = conversationSnapshotProjection(result)
+        val refreshed = ConversationFrame.parseConversation(result, conversation.workspaceId)
+            ?: conversation.copy(taskStatus = snapshot.taskStatus, sequence = snapshot.workbench.sequence)
+        val conversations = addRecentConversation(mutableState.value.conversations, refreshed)
         mutableState.value = mutableState.value.copy(
+            conversations = conversations,
+            selectedConversation = refreshed,
             transcript = snapshot.transcript,
             workbench = snapshot.workbench,
+            content = snapshot.content,
             activeTurn = snapshot.workbench.hasActiveRun(),
             errorMessage = null,
         )
@@ -431,8 +541,7 @@ private fun parseWorkspace(value: JsonElement): CompanionWorkspace? {
     val id = objectValue.stringValue("value") ?: return null
     val conversations = (objectValue["conversations"] as? JsonArray).orEmpty().mapNotNull { item ->
         val conversation = item as? JsonObject ?: return@mapNotNull null
-        val conversationId = conversation.stringValue("id") ?: return@mapNotNull null
-        CompanionConversation(conversationId, conversation.stringValue("title") ?: "Conversation")
+        ConversationFrame.parseConversation(conversation, id)
     }
     return CompanionWorkspace(id, objectValue.stringValue("label") ?: id, conversations)
 }

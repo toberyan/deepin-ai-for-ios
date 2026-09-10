@@ -34,6 +34,20 @@ data class TranscriptEntry(val id: String, val role: TranscriptRole, val text: S
 enum class TranscriptRole { User, Assistant, System }
 data class AgentApproval(val id: String, val actionType: String, val title: String, val details: JsonObject)
 
+internal data class ConversationSnapshotProjection(
+    val transcript: List<TranscriptEntry>,
+    val workbench: WorkbenchState,
+)
+
+internal fun conversationSnapshotProjection(result: JsonObject): ConversationSnapshotProjection {
+    val sequence = result["sequence"].longValue() ?: 0L
+    return ConversationSnapshotProjection(
+        transcript = transcriptEntries(result["render"] as? JsonObject),
+        workbench = WorkbenchFrame.parseSnapshot(result["workbench"] as? JsonObject, sequence)
+            ?: WorkbenchState(sequence = sequence),
+    )
+}
+
 data class CompanionUiState(
     val connection: ConnectionState = ConnectionState.Disconnected,
     val pairedHostName: String? = null,
@@ -379,13 +393,11 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun applyConversationSnapshot(conversation: CompanionConversation, result: JsonObject) {
         if (mutableState.value.selectedConversation?.id != conversation.id) return
-        val sequence = result["sequence"].longValue() ?: 0L
-        val workbench = WorkbenchFrame.parseSnapshot(result["workbench"] as? JsonObject, sequence)
-            ?: WorkbenchState(sequence = sequence)
+        val snapshot = conversationSnapshotProjection(result)
         mutableState.value = mutableState.value.copy(
-            transcript = transcriptEntries(result["render"] as? JsonObject),
-            workbench = workbench,
-            activeTurn = workbench.hasActiveRun(),
+            transcript = snapshot.transcript,
+            workbench = snapshot.workbench,
+            activeTurn = snapshot.workbench.hasActiveRun(),
             errorMessage = null,
         )
     }

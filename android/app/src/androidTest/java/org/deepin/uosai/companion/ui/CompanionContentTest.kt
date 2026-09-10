@@ -4,7 +4,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -22,7 +21,7 @@ class CompanionContentTest {
     val composeRule = createAndroidComposeRule<ComposeTestActivity>()
 
     @Test
-    fun tabletDrawerStartsClosedAndClosesAfterOpeningAConversation() {
+    fun tabletDrawerStartsOpenAndClosesAfterOpeningAConversation() {
         val conversation = CompanionConversation("conversation-1", "Planning")
         var openedConversation: CompanionConversation? = null
 
@@ -49,10 +48,6 @@ class CompanionContentTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("Open shared workspaces").assertIsDisplayed()
-        composeRule.onNodeWithText("Shared workspaces").assertIsNotDisplayed()
-
-        composeRule.onNodeWithContentDescription("Open shared workspaces").performClick()
         composeRule.onNodeWithText("Shared workspaces").assertIsDisplayed()
         composeRule.onNodeWithText("Planning").performClick()
 

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import org.deepin.uosai.companion.core.network.CompanionSocket
@@ -41,6 +42,9 @@ data class CompanionUiState(
     val selectedConversation: CompanionConversation? = null,
     val transcript: List<TranscriptEntry> = emptyList(),
     val workbench: WorkbenchState = WorkbenchState(),
+    val selectedAgentRunId: String? = null,
+    val selectedArtifact: ArtifactRef? = null,
+    val artifactPreview: LoadedArtifactPreview? = null,
     val activeTurn: Boolean = false,
     val pendingApproval: AgentApproval? = null,
     val errorMessage: String? = null,
@@ -135,6 +139,9 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
             selectedConversation = conversation,
             transcript = emptyList(),
             workbench = WorkbenchState(),
+            selectedAgentRunId = null,
+            selectedArtifact = null,
+            artifactPreview = null,
             activeTurn = false,
             pendingApproval = null,
             errorMessage = null,
@@ -147,6 +154,9 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
             selectedConversation = null,
             transcript = emptyList(),
             workbench = WorkbenchState(),
+            selectedAgentRunId = null,
+            selectedArtifact = null,
+            artifactPreview = null,
             pendingApproval = null,
         )
     }
@@ -180,6 +190,105 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         mutableState.value = mutableState.value.copy(pendingApproval = null)
         runCatching { socket.send(CommandFrame.answerApproval(requestId(), conversation.id, approval.id, approved)) }
             .onFailure { showError("Unable to submit this Agent approval.") }
+    }
+
+    fun selectAgentRun(runId: String?) {
+        mutableState.value = mutableState.value.copy(selectedAgentRunId = runId)
+    }
+
+    fun selectArtifact(artifact: ArtifactRef?) {
+        mutableState.value = mutableState.value.copy(selectedArtifact = artifact, artifactPreview = null)
+    }
+
+    fun loadArtifactPreview(artifact: ArtifactRef) = viewModelScope.launch {
+        val conversation = mutableState.value.selectedConversation ?: return@launch
+        mutableState.value = mutableState.value.copy(
+            selectedArtifact = artifact,
+            artifactPreview = LoadedArtifactPreview(
+                artifactId = artifact.id,
+                previewKind = artifact.previewKind,
+                state = "loading",
+            ),
+        )
+        var expectedRevision = artifact.revision
+        repeat(2) { attempt ->
+            var accumulated: AccumulatedArtifactPreview? = null
+            var cursor = JsonObject(emptyMap())
+            while (true) {
+                val frame = try {
+                    socket.request(
+                        CommandFrame.getArtifactPreview(
+                            requestId = requestId(),
+                            conversationId = conversation.id,
+                            artifactId = artifact.id,
+                            revision = expectedRevision,
+                            cursor = cursor,
+                        ),
+                    )
+                } catch (_: Throwable) {
+                    mutableState.value = mutableState.value.copy(
+                        artifactPreview = LoadedArtifactPreview(artifact.id, artifact.previewKind, "failed"),
+                    )
+                    return@launch
+                }
+                val preview = frame.commandResult()?.get("preview") as? JsonObject
+                if (preview == null) {
+                    mutableState.value = mutableState.value.copy(
+                        artifactPreview = LoadedArtifactPreview(artifact.id, artifact.previewKind, "failed"),
+                    )
+                    return@launch
+                }
+                val page = preview.toArtifactPreviewPage()
+                if (page.state != "ready") {
+                    if (page.state == "stale_preview" && attempt == 0) {
+                        expectedRevision = ""
+                        break
+                    }
+                    mutableState.value = mutableState.value.copy(
+                        artifactPreview = LoadedArtifactPreview(artifact.id, artifact.previewKind, page.state),
+                    )
+                    return@launch
+                }
+                when (val result = appendArtifactPreviewPage(accumulated, page)) {
+                    ArtifactPreviewPageResult.Reload -> {
+                        if (attempt == 0) {
+                            expectedRevision = ""
+                            break
+                        }
+                        mutableState.value = mutableState.value.copy(
+                            artifactPreview = LoadedArtifactPreview(artifact.id, artifact.previewKind, "stale_preview"),
+                        )
+                        return@launch
+                    }
+                    is ArtifactPreviewPageResult.Continue -> {
+                        accumulated = result.preview
+                        if (!result.preview.truncated) {
+                            mutableState.value = mutableState.value.copy(
+                                artifactPreview = LoadedArtifactPreview(
+                                    artifactId = artifact.id,
+                                    previewKind = artifact.previewKind,
+                                    state = "ready",
+                                    revision = result.preview.revision,
+                                    content = result.preview.content,
+                                    truncated = false,
+                                ),
+                            )
+                            return@launch
+                        }
+                        cursor = result.preview.nextCursor ?: run {
+                            mutableState.value = mutableState.value.copy(
+                                artifactPreview = LoadedArtifactPreview(artifact.id, artifact.previewKind, "failed"),
+                            )
+                            return@launch
+                        }
+                        expectedRevision = result.preview.revision
+                    }
+                }
+            }
+        }
+        mutableState.value = mutableState.value.copy(
+            artifactPreview = LoadedArtifactPreview(artifact.id, artifact.previewKind, "stale_preview"),
+        )
     }
 
     fun dismissError() {
@@ -331,6 +440,14 @@ private fun JsonObject.textDelta(): String? =
 
 private fun JsonObject.stringValue(name: String): String? = (get(name) as? JsonPrimitive)?.contentOrNull
 private fun JsonElement?.longValue(): Long? = (this as? JsonPrimitive)?.longOrNull
+
+private fun JsonObject.toArtifactPreviewPage(): ArtifactPreviewPage = ArtifactPreviewPage(
+    state = stringValue("state") ?: "failed",
+    revision = stringValue("revision") ?: "",
+    content = get("content") as? JsonObject,
+    truncated = (get("truncated") as? JsonPrimitive)?.booleanOrNull ?: false,
+    nextCursor = get("next_cursor") as? JsonObject,
+)
 
 private fun WorkbenchState.hasActiveRun(): Boolean = activeRunId?.let { runId ->
     runs[runId]?.state == AgentRunState.Running || runs[runId]?.state == AgentRunState.WaitingApproval

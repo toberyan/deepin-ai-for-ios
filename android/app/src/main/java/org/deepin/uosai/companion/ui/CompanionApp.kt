@@ -63,6 +63,7 @@ import org.deepin.uosai.companion.feature.pairing.PairingInstructions
 import org.deepin.uosai.companion.feature.pairing.QrScannerDialog
 import org.deepin.uosai.companion.feature.pairing.showManualEntry
 import org.deepin.uosai.companion.feature.pairing.showScanner
+import org.deepin.uosai.companion.ui.render.RenderBlockContent
 import kotlinx.coroutines.launch
 
 data class CompanionActions(
@@ -75,6 +76,9 @@ data class CompanionActions(
     val startTurn: (String, String, String) -> Unit,
     val cancelTurn: () -> Unit,
     val answerApproval: (Boolean) -> Unit,
+    val selectAgentRun: (String?) -> Unit = {},
+    val selectArtifact: (org.deepin.uosai.companion.app.ArtifactRef?) -> Unit = {},
+    val loadArtifactPreview: (org.deepin.uosai.companion.app.ArtifactRef) -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -92,6 +96,9 @@ fun CompanionApp(state: CompanionUiState, model: CompanionViewModel) {
             startTurn = { message, assistantId, modelId -> model.startTurn(message, assistantId, modelId) },
             cancelTurn = { model.cancelTurn() },
             answerApproval = { model.answerApproval(it) },
+            selectAgentRun = model::selectAgentRun,
+            selectArtifact = model::selectArtifact,
+            loadArtifactPreview = model::loadArtifactPreview,
         ),
     )
 }
@@ -189,13 +196,33 @@ private fun TabletCompanionLayout(state: CompanionUiState, actions: CompanionAct
                 state.errorMessage?.let { error ->
                     ErrorBanner(error, actions.dismissError)
                 }
-                ConversationPane(
-                    state = state,
-                    onSend = actions.startTurn,
-                    onCancel = actions.cancelTurn,
-                    onBack = null,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                Row(Modifier.fillMaxWidth().weight(1f)) {
+                    ConversationPane(
+                        state = state,
+                        onSend = actions.startTurn,
+                        onCancel = actions.cancelTurn,
+                        onBack = null,
+                        onShowWorkbench = null,
+                        onOpenArtifact = { artifactId ->
+                            state.workbench.artifacts[artifactId]?.let {
+                                actions.selectArtifact(it)
+                                actions.loadArtifactPreview(it)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    WorkbenchPane(
+                        state = state.workbench,
+                        actions = WorkbenchActions(
+                            selectAgentRun = actions.selectAgentRun,
+                            selectArtifact = actions.selectArtifact,
+                            loadArtifactPreview = actions.loadArtifactPreview,
+                        ),
+                        selectedArtifact = state.selectedArtifact,
+                        artifactPreview = state.artifactPreview,
+                        modifier = Modifier.width(380.dp).fillMaxSize(),
+                    )
+                }
             }
         }
     }
@@ -204,6 +231,7 @@ private fun TabletCompanionLayout(state: CompanionUiState, actions: CompanionAct
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PhoneCompanionLayout(state: CompanionUiState, actions: CompanionActions) {
+    var showWorkbench by remember(state.selectedConversation?.id) { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -233,13 +261,38 @@ private fun PhoneCompanionLayout(state: CompanionUiState, actions: CompanionActi
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                ConversationPane(
-                    state = state,
-                    onSend = actions.startTurn,
-                    onCancel = actions.cancelTurn,
-                    onBack = actions.closeConversation,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (showWorkbench) {
+                    Column(Modifier.fillMaxSize()) {
+                        TextButton(onClick = { showWorkbench = false }) { Text("Conversation") }
+                        WorkbenchPane(
+                            state = state.workbench,
+                            actions = WorkbenchActions(
+                                selectAgentRun = actions.selectAgentRun,
+                                selectArtifact = actions.selectArtifact,
+                                loadArtifactPreview = actions.loadArtifactPreview,
+                            ),
+                            selectedArtifact = state.selectedArtifact,
+                            artifactPreview = state.artifactPreview,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                } else {
+                    ConversationPane(
+                        state = state,
+                        onSend = actions.startTurn,
+                        onCancel = actions.cancelTurn,
+                        onBack = actions.closeConversation,
+                        onShowWorkbench = { showWorkbench = true },
+                        onOpenArtifact = { artifactId ->
+                            state.workbench.artifacts[artifactId]?.let {
+                                actions.selectArtifact(it)
+                                actions.loadArtifactPreview(it)
+                                showWorkbench = true
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
     }
@@ -381,6 +434,8 @@ private fun ConversationPane(
     onSend: (String, String, String) -> Unit,
     onCancel: () -> Unit,
     onBack: (() -> Unit)?,
+    onShowWorkbench: (() -> Unit)?,
+    onOpenArtifact: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val conversation = state.selectedConversation
@@ -395,6 +450,7 @@ private fun ConversationPane(
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             onBack?.let { TextButton(onClick = it) { Text("Back") } }
             Text(conversation.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1)
+            onShowWorkbench?.let { TextButton(onClick = it) { Text("Activity") } }
             if (state.activeTurn) OutlinedButton(onClick = onCancel) { Text("Cancel Agent") }
         }
         HorizontalDivider()
@@ -403,6 +459,12 @@ private fun ConversationPane(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(state.transcript, key = { it.id }) { entry -> TranscriptBubble(entry) }
+            if (state.workbench.blocks.isNotEmpty()) {
+                item { Text("Agent output", style = MaterialTheme.typography.titleSmall) }
+                items(state.workbench.blocks, key = { it.id }) { block ->
+                    RenderBlockContent(block = block, onOpenArtifact = onOpenArtifact)
+                }
+            }
         }
         HorizontalDivider()
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

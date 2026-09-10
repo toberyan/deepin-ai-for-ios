@@ -23,6 +23,8 @@ import org.deepin.uosai.companion.core.pairing.PairingUri
 import org.deepin.uosai.companion.core.protocol.CommandFrame
 import org.deepin.uosai.companion.core.protocol.InboundFrame
 import org.deepin.uosai.companion.core.protocol.RemoteEvent
+import org.deepin.uosai.companion.core.protocol.RemoteEventFrame
+import org.deepin.uosai.companion.core.protocol.WorkbenchFrame
 import org.deepin.uosai.companion.core.security.KeystoreDeviceGrantStore
 
 data class CompanionWorkspace(val id: String, val label: String, val conversations: List<CompanionConversation>)
@@ -38,6 +40,7 @@ data class CompanionUiState(
     val selectedWorkspaceId: String? = null,
     val selectedConversation: CompanionConversation? = null,
     val transcript: List<TranscriptEntry> = emptyList(),
+    val workbench: WorkbenchState = WorkbenchState(),
     val activeTurn: Boolean = false,
     val pendingApproval: AgentApproval? = null,
     val errorMessage: String? = null,
@@ -50,11 +53,16 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
     private val mutableState = MutableStateFlow(CompanionUiState())
     val state: StateFlow<CompanionUiState> = mutableState.asStateFlow()
     private var lastConsumedDeepLink: String? = null
+    private var reloadingConversationId: String? = null
 
     init {
         viewModelScope.launch {
             socket.connectionState.collectLatest { connection ->
-                mutableState.value = mutableState.value.copy(connection = connection)
+                val current = mutableState.value
+                mutableState.value = current.copy(connection = connection)
+                if (connection is ConnectionState.Connected && current.connection is ConnectionState.Reconnecting) {
+                    loadWorkspaces(current.selectedConversation?.id)
+                }
             }
         }
         viewModelScope.launch {
@@ -87,27 +95,34 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun reconnect() = viewModelScope.launch {
+        val conversationId = mutableState.value.selectedConversation?.id
         runCatching { socket.connectSavedGrant() }
             .onSuccess { grant ->
                 if (grant != null) {
                     mutableState.value = mutableState.value.copy(pairedHostName = grant.hostDisplayName, errorMessage = null)
-                    loadWorkspaces()
+                    loadWorkspaces(conversationId)
                 }
             }
             .onFailure { showError("Unable to reconnect to UOS AI.") }
     }
 
-    fun loadWorkspaces() = viewModelScope.launch {
+    fun loadWorkspaces(resumeConversationId: String? = null) = viewModelScope.launch {
         runCatching {
             socket.request(CommandFrame.listWorkspaces(requestId()))
         }.onSuccess { frame ->
             val result = frame.commandResult() ?: return@onSuccess showFrameError(frame, "Unable to load shared workspaces.")
             val workspaces = (result["workspaces"] as? JsonArray).orEmpty().mapNotNull(::parseWorkspace)
-            mutableState.value = mutableState.value.copy(
+            val current = mutableState.value
+            mutableState.value = current.copy(
                 workspaces = workspaces,
-                selectedWorkspaceId = mutableState.value.selectedWorkspaceId ?: workspaces.firstOrNull()?.id,
+                selectedWorkspaceId = current.selectedWorkspaceId ?: workspaces.firstOrNull()?.id,
                 errorMessage = null,
             )
+            resumeConversationId?.let { conversationId ->
+                workspaces.asSequence().flatMap { it.conversations.asSequence() }
+                    .firstOrNull { it.id == conversationId }
+                    ?.let(::openConversation)
+            }
         }.onFailure { showError("Unable to load shared workspaces.") }
     }
 
@@ -115,28 +130,25 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         mutableState.value = mutableState.value.copy(selectedWorkspaceId = workspaceId)
     }
 
-    fun openConversation(conversation: CompanionConversation) = viewModelScope.launch {
+    fun openConversation(conversation: CompanionConversation) {
         mutableState.value = mutableState.value.copy(
             selectedConversation = conversation,
             transcript = emptyList(),
+            workbench = WorkbenchState(),
             activeTurn = false,
             pendingApproval = null,
             errorMessage = null,
         )
-        runCatching {
-            socket.request(CommandFrame.getConversation(requestId(), conversation.id))
-        }.onSuccess { frame ->
-            val result = frame.commandResult() ?: return@onSuccess showFrameError(frame, "Unable to open this conversation.")
-            val sequence = result["sequence"].longValue() ?: 0L
-            mutableState.value = mutableState.value.copy(transcript = transcriptEntries(result["render"] as? JsonObject))
-            runCatching {
-                socket.request(CommandFrame.subscribe(requestId(), mapOf(conversation.id to sequence)))
-            }.onFailure { showError("Unable to subscribe to conversation updates.") }
-        }.onFailure { showError("Unable to open this conversation.") }
+        loadConversationSnapshot(conversation)
     }
 
     fun closeConversation() {
-        mutableState.value = mutableState.value.copy(selectedConversation = null, transcript = emptyList(), pendingApproval = null)
+        mutableState.value = mutableState.value.copy(
+            selectedConversation = null,
+            transcript = emptyList(),
+            workbench = WorkbenchState(),
+            pendingApproval = null,
+        )
     }
 
     fun startTurn(message: String, assistantId: String, modelId: String) = viewModelScope.launch {
@@ -184,30 +196,89 @@ class CompanionViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private fun handleEvent(frame: org.deepin.uosai.companion.core.protocol.RemoteEventFrame) {
+    private fun handleEvent(frame: RemoteEventFrame) {
         val current = mutableState.value
         if (frame.conversationId != current.selectedConversation?.id) return
+        val reduced = reduceWorkbench(current.workbench, frame)
+        val reducedState = when (reduced) {
+            is WorkbenchReduceResult.Applied -> reduced.state
+            is WorkbenchReduceResult.Ignored -> return
+            WorkbenchReduceResult.Reload -> {
+                reloadConversationSnapshot(current.selectedConversation)
+                return
+            }
+        }
+        var next = current.copy(workbench = reducedState)
+        if (frame.event == RemoteEvent.AgentRunDelta) {
+            next = next.copy(activeTurn = reducedState.hasActiveRun())
+        }
         when (frame.event) {
             RemoteEvent.MessageDelta -> frame.payload.textDelta()?.let { text ->
                 val entry = TranscriptEntry("${frame.conversationId}-${frame.sequence}", TranscriptRole.Assistant, text)
-                if (current.transcript.none { it.id == entry.id }) {
-                    mutableState.value = current.copy(transcript = current.transcript + entry)
+                if (next.transcript.none { it.id == entry.id }) {
+                    next = next.copy(transcript = next.transcript + entry)
                 }
             }
             RemoteEvent.ApprovalRequested -> {
-                val approvalId = frame.payload.stringValue("approvalId") ?: return
-                mutableState.value = current.copy(
-                    pendingApproval = AgentApproval(
-                        id = approvalId,
-                        actionType = frame.payload.stringValue("actionType") ?: "agent_action",
-                        title = frame.payload.stringValue("title") ?: "Agent approval required",
-                        details = frame.payload["details"] as? JsonObject ?: JsonObject(emptyMap()),
-                    ),
-                )
+                frame.payload.stringValue("approvalId")?.let { approvalId ->
+                    next = next.copy(
+                        pendingApproval = AgentApproval(
+                            id = approvalId,
+                            actionType = frame.payload.stringValue("actionType") ?: "agent_action",
+                            title = frame.payload.stringValue("title") ?: "Agent approval required",
+                            details = frame.payload["details"] as? JsonObject ?: JsonObject(emptyMap()),
+                        ),
+                    )
+                }
             }
-            RemoteEvent.TurnFinished, RemoteEvent.TurnFailed -> mutableState.value = current.copy(activeTurn = false)
+            RemoteEvent.TurnFinished, RemoteEvent.TurnFailed -> next = next.copy(activeTurn = false)
             else -> Unit
         }
+        mutableState.value = next
+    }
+
+    private fun loadConversationSnapshot(conversation: CompanionConversation) = viewModelScope.launch {
+        runCatching {
+            socket.request(CommandFrame.getConversation(requestId(), conversation.id))
+        }.onSuccess { frame ->
+            val result = frame.commandResult() ?: return@onSuccess showFrameError(frame, "Unable to open this conversation.")
+            applyConversationSnapshot(conversation, result)
+            val sequence = mutableState.value.workbench.sequence
+            runCatching {
+                socket.request(CommandFrame.subscribe(requestId(), mapOf(conversation.id to sequence)))
+            }.onFailure { showError("Unable to subscribe to conversation updates.") }
+        }.onFailure { showError("Unable to open this conversation.") }
+    }
+
+    private fun reloadConversationSnapshot(conversation: CompanionConversation?) {
+        val target = conversation ?: return
+        if (reloadingConversationId == target.id) return
+        reloadingConversationId = target.id
+        viewModelScope.launch {
+            try {
+                val frame = socket.request(CommandFrame.getConversation(requestId(), target.id))
+                val result = frame.commandResult() ?: return@launch showFrameError(frame, "Unable to refresh this conversation.")
+                applyConversationSnapshot(target, result)
+                socket.request(CommandFrame.subscribe(requestId(), mapOf(target.id to mutableState.value.workbench.sequence)))
+            } catch (_: Throwable) {
+                showError("Unable to refresh this conversation.")
+            } finally {
+                reloadingConversationId = null
+            }
+        }
+    }
+
+    private fun applyConversationSnapshot(conversation: CompanionConversation, result: JsonObject) {
+        if (mutableState.value.selectedConversation?.id != conversation.id) return
+        val sequence = result["sequence"].longValue() ?: 0L
+        val workbench = WorkbenchFrame.parseSnapshot(result["workbench"] as? JsonObject, sequence)
+            ?: WorkbenchState(sequence = sequence)
+        mutableState.value = mutableState.value.copy(
+            transcript = transcriptEntries(result["render"] as? JsonObject),
+            workbench = workbench,
+            activeTurn = workbench.hasActiveRun(),
+            errorMessage = null,
+        )
     }
 
     private fun showFrameError(frame: InboundFrame, fallback: String) {
@@ -260,3 +331,7 @@ private fun JsonObject.textDelta(): String? =
 
 private fun JsonObject.stringValue(name: String): String? = (get(name) as? JsonPrimitive)?.contentOrNull
 private fun JsonElement?.longValue(): Long? = (this as? JsonPrimitive)?.longOrNull
+
+private fun WorkbenchState.hasActiveRun(): Boolean = activeRunId?.let { runId ->
+    runs[runId]?.state == AgentRunState.Running || runs[runId]?.state == AgentRunState.WaitingApproval
+} == true

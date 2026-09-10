@@ -92,6 +92,23 @@ data class CommandFrame(
                 put("approved", approved)
             },
         )
+
+        fun getArtifactPreview(
+            requestId: String,
+            conversationId: String,
+            artifactId: String,
+            revision: String = "",
+            cursor: JsonObject = buildJsonObject { },
+        ) = CommandFrame(
+            requestId = requestId,
+            command = "get_artifact_preview",
+            payload = buildJsonObject {
+                put("conversationId", conversationId)
+                put("artifactId", artifactId)
+                if (revision.isNotBlank()) put("revision", revision)
+                put("cursor", cursor)
+            },
+        )
     }
 }
 
@@ -125,6 +142,9 @@ sealed interface RemoteEvent {
     data object TurnFinished : RemoteEvent
     data object TurnFailed : RemoteEvent
     data object CommandAck : RemoteEvent
+    data object AgentRunDelta : RemoteEvent
+    data object AgentActivityDelta : RemoteEvent
+    data object ArtifactDelta : RemoteEvent
     data class Unknown(val wireName: String) : RemoteEvent
 
     companion object {
@@ -136,6 +156,9 @@ sealed interface RemoteEvent {
             "turn_finished" -> TurnFinished
             "turn_failed" -> TurnFailed
             "command_ack" -> CommandAck
+            "agent_run_delta" -> AgentRunDelta
+            "agent_activity_delta" -> AgentActivityDelta
+            "artifact_delta" -> ArtifactDelta
             else -> Unknown(wireName)
         }
     }

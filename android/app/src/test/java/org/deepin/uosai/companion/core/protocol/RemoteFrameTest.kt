@@ -28,4 +28,26 @@ class RemoteFrameTest {
 
         assertEquals(RemoteEvent.Unknown("future_event"), (frame as InboundFrame.Event).event.event)
     }
+
+    @Test
+    fun artifactPreviewUsesTheAdditiveV1WireName() {
+        val json = RemoteJson.encode(
+            CommandFrame.getArtifactPreview(
+                requestId = "preview-1",
+                conversationId = "conversation-1",
+                artifactId = "artifact-1",
+            ),
+        )
+
+        assertTrue(json.contains("\"command\":\"get_artifact_preview\""))
+        assertTrue(json.contains("\"artifactId\":\"artifact-1\""))
+        assertTrue(json.contains("\"cursor\":{}"))
+    }
+
+    @Test
+    fun workbenchEventNamesRemainTyped() {
+        assertEquals(RemoteEvent.AgentRunDelta, RemoteEvent.fromWireName("agent_run_delta"))
+        assertEquals(RemoteEvent.AgentActivityDelta, RemoteEvent.fromWireName("agent_activity_delta"))
+        assertEquals(RemoteEvent.ArtifactDelta, RemoteEvent.fromWireName("artifact_delta"))
+    }
 }
